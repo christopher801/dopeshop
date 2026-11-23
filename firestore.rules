@@ -1,0 +1,68 @@
+rules_version = '2';
+
+// DOPE SHOP — Reglas de seguridad de Cloud Firestore.
+// Las operaciones sensibles (crear pedidos, cambiar estados, ajustar inventario,
+// CRUD de catálogo) se ejecutan en el servidor con Firebase Admin SDK, que
+// ignora estas reglas. Las reglas bloquean cualquier escritura directa desde el navegador.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() { return isSignedIn() && request.auth.token.admin == true; }
+    function isOwner(uid) { return isSignedIn() && request.auth.uid == uid; }
+
+    // Catálogo público: solo productos/categorías activos.
+    match /products/{productId} {
+      allow read: if resource.data.isActive == true || isAdmin();
+      allow write: if isAdmin();
+    }
+    match /categories/{categoryId} {
+      allow read: if resource.data.isActive == true || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Configuración pública de la tienda (sin secretos).
+    match /storeSettings/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Promociones: privadas (los códigos no deben ser listables).
+    match /promotions/{promoId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Historial de inventario: solo administradores.
+    match /inventoryHistory/{entryId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Reseñas: lectura pública solo si fueron aprobadas; escritura solo admin.
+    match /reviews/{reviewId} {
+      allow read: if resource.data.approved == true || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Pedidos: el cliente solo lee los suyos. Se crean desde el servidor,
+    // por lo que el cliente nunca puede fijar totales ni estados.
+    match /orders/{orderId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if false;
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // Perfiles de usuario. El cliente NO puede escribir roles ni campos extra.
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create: if isOwner(uid)
+        && request.resource.data.keys().hasOnly(['name', 'email', 'phone', 'wishlist', 'createdAt', 'updatedAt']);
+      allow update: if isOwner(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone', 'wishlist', 'updatedAt'])
+        && (!('wishlist' in request.resource.data) || request.resource.data.wishlist.size() <= 100);
+      allow delete: if false;
+    }
+
+    // Todo lo demás está denegado por defecto.
+  }
+}
